@@ -1,0 +1,11 @@
+locations:
+  home:
+    name: "Основна квартира"
+    group: "4.2"
+  old_home:
+    name: "Стара квартира"
+    group: "6.2"
+
+work_hours:
+  start: "09:00"
+  end: "18:00"
