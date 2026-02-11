@@ -99,210 +99,254 @@ async def config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+def _fetch_all_schedules(parser):
+    """Отримує всі графіки (Today/Tomorrow) — спільна логіка з CLI"""
+    import requests
+    resp = requests.get(PowerDataFetcher.API_URL, timeout=10)
+    data = resp.json()
+    items = data['hydra:member'][0]['menuItems']
+
+    result = []
+    for item in items:
+        item_name = item.get('name', '')
+        html = item.get('rawHtml', '')
+        if html:
+            date = parser.extract_date(html)
+            schedule = parser.parse_all_groups(html)
+            result.append({
+                'name': item_name,
+                'date': date,
+                'schedule': schedule,
+                'html': html
+            })
+    return result
+
+
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
+
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
         return
-    
+
     await update.message.reply_text("⏳ Завантажую графік...")
-    
-    fetcher = PowerDataFetcher()
+
     parser = PowerScheduleParser()
-    
-    import requests
-    resp = requests.get('https://api.loe.lviv.ua/api/menus?page=1&type=photo-grafic')
-    data = resp.json()
-    items = data['hydra:member'][0]['menuItems']
-    
-    today_data = next((item for item in items if item.get('name') == 'Today' and item.get('rawHtml')), None)
-    tomorrow_data = next((item for item in items if item.get('name') == 'Tomorrow' and item.get('rawHtml')), None)
-    
+
+    try:
+        schedules = _fetch_all_schedules(parser)
+    except Exception:
+        await update.message.reply_text("❌ Не вдалося отримати дані")
+        return
+
     config = user_configs[user_id]
-    
-    if not today_data:
+
+    today_found = any(s['name'] == 'Today' for s in schedules)
+    tomorrow_data = next((s for s in schedules if s['name'] == 'Tomorrow'), None)
+
+    if not today_found:
         message = "⚠️ Дані на сьогодні вже недоступні\n\n"
-        
+
         if tomorrow_data:
-            html = tomorrow_data.get("rawHtml", "")
-            date = parser.extract_date(html)
-            schedule = parser.parse_all_groups(html)
-            
+            schedule = tomorrow_data['schedule']
             home_outages = schedule.get(config["home_group"], [])
             old_home_outages = schedule.get(config["old_home_group"], [])
-            
-            message += f"📅 Графік на завтра ({date})\n\n"
+
+            message += f"📅 Графік на завтра ({tomorrow_data['date']})\n\n"
             message += f"🏠 Основна квартира (група {config['home_group']}):\n"
             message += f"{format_schedule(home_outages)}\n\n"
             message += f"🏘 Друга квартира (група {config['old_home_group']}):\n"
             message += f"{format_schedule(old_home_outages)}"
-        
+
         await update.message.reply_text(message)
         return
-    
-    html = today_data.get("rawHtml", "")
-    date = parser.extract_date(html)
-    schedule = parser.parse_all_groups(html)
-    
-    home_outages = schedule.get(config["home_group"], [])
-    old_home_outages = schedule.get(config["old_home_group"], [])
-    
-    message = f"📅 Графік на {date}\n\n"
-    message += f"🏠 Основна квартира (група {config['home_group']}):\n"
-    message += f"{format_schedule(home_outages)}\n\n"
-    message += f"🏘 Друга квартира (група {config['old_home_group']}):\n"
-    message += f"{format_schedule(old_home_outages)}"
-    
-    await update.message.reply_text(message)
+
+    message = ""
+    for sched in schedules:
+        if sched['name'] in ['Today', 'Tomorrow']:
+            schedule = sched['schedule']
+            home_outages = schedule.get(config["home_group"], [])
+            old_home_outages = schedule.get(config["old_home_group"], [])
+
+            message += f"📅 Графік на {sched['date']} ({sched['name']})\n\n"
+            message += f"🏠 Основна квартира (група {config['home_group']}):\n"
+            message += f"{format_schedule(home_outages)}\n\n"
+            message += f"🏘 Друга квартира (група {config['old_home_group']}):\n"
+            message += f"{format_schedule(old_home_outages)}\n\n"
+
+    await update.message.reply_text(message.strip())
 
 
 async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
+
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
         return
-    
+
     await update.message.reply_text("⏳ Складаю план...")
-    
+
     fetcher = PowerDataFetcher()
     parser = PowerScheduleParser()
     scheduler = WorkScheduler()
-    
+
     data = fetcher.get_latest_schedule()
     if not data:
         await update.message.reply_text("❌ Не вдалося отримати дані")
         return
-    
+
     html = data.get("rawHtml", "")
     date = parser.extract_date(html)
     schedule = parser.parse_all_groups(html)
-    
+
     config = user_configs[user_id]
     home_outages = schedule.get(config["home_group"], [])
     old_home_outages = schedule.get(config["old_home_group"], [])
-    
-    current_hour = datetime.now().hour
-    
-    # Аналіз по годинах
+
+    current_time = datetime.now()
+    current_minutes = current_time.hour * 60 + current_time.minute
+
+    # Збираємо всі ключові моменти часу (як у CLI)
+    time_points = {current_minutes, 24 * 60}
+
+    for outage in home_outages + old_home_outages:
+        start_h, start_m = map(int, outage["start"].split(":"))
+        end_h, end_m = map(int, outage["end"].replace("24:00", "23:59").split(":"))
+        time_points.add(start_h * 60 + start_m)
+        time_points.add(end_h * 60 + end_m)
+
+    time_points = sorted([t for t in time_points if t >= current_minutes])
+
+    # Формуємо періоди з точними межами
     periods = []
-    current_period = None
-    
-    for hour in range(current_hour, 24):
-        time_str = f"{hour:02d}:00"
-        home_power = scheduler.is_power_available(home_outages, time_str)
-        old_home_power = scheduler.is_power_available(old_home_outages, time_str)
-        situation = (home_power, old_home_power)
-        
-        if current_period is None or current_period['situation'] != situation:
-            if current_period:
-                periods.append(current_period)
-            current_period = {'start': hour, 'end': hour + 1, 'situation': situation}
-        else:
-            current_period['end'] = hour + 1
-    
-    if current_period:
-        periods.append(current_period)
-    
+    for i in range(len(time_points) - 1):
+        start_min = time_points[i]
+        end_min = time_points[i + 1]
+
+        mid_min = (start_min + end_min) // 2
+        mid_time = f"{mid_min // 60:02d}:{mid_min % 60:02d}"
+
+        home_power = scheduler.is_power_available(home_outages, mid_time)
+        old_home_power = scheduler.is_power_available(old_home_outages, mid_time)
+
+        periods.append({
+            'start': start_min,
+            'end': end_min,
+            'situation': (home_power, old_home_power)
+        })
+
     message = f"📅 План на {date}\n\n"
-    
+
     for period in periods:
-        start = f"{period['start']:02d}:00"
-        end = f"{period['end']:02d}:00" if period['end'] < 24 else "24:00"
+        start_h, start_m = period['start'] // 60, period['start'] % 60
+        end_h, end_m = period['end'] // 60, period['end'] % 60
+        start = f"{start_h:02d}:{start_m:02d}"
+        end = f"{end_h:02d}:{end_m:02d}"
         home, old_home = period['situation']
-        
+
         if home and old_home:
-            message += f"⏰ {start}-{end}: ✅ Світло скрізь\n"
+            message += f"⏰ {start}-{end}: ✅ Світло в обох групах\n"
         elif home and not old_home:
-            message += f"⏰ {start}-{end}: 🏠 Тільки вдома\n"
+            message += f"⏰ {start}-{end}: 🏠 Група {config['home_group']}\n"
         elif not home and old_home:
-            message += f"⏰ {start}-{end}: 🏘 Тільки на другій\n"
+            message += f"⏰ {start}-{end}: 🏘 Група {config['old_home_group']}\n"
         else:
-            message += f"⏰ {start}-{end}: ❌ Світла немає\n"
-    
-    end_time = "23:59"
-    home_hours = scheduler.calculate_available_hours(home_outages, f"{current_hour:02d}:00", end_time)
-    old_home_hours = scheduler.calculate_available_hours(old_home_outages, f"{current_hour:02d}:00", end_time)
-    
-    message += f"\n💡 Підсумок:\n🏠 Вдома: {home_hours:.1f}h\n🏘 Друга: {old_home_hours:.1f}h\n"
-    message += f"\n✅ Краще {'вдома' if home_hours >= old_home_hours else 'на другій'}"
-    
+            message += f"⏰ {start}-{end}: ❌ Світла немає в обох групах\n"
+
+    start_time = f"{current_time.hour:02d}:{current_time.minute:02d}"
+    home_hours = scheduler.calculate_available_hours(home_outages, start_time, "23:59")
+    old_home_hours = scheduler.calculate_available_hours(old_home_outages, start_time, "23:59")
+
+    message += f"\n💡 Підсумок:\n"
+    message += f"🏠 Група {config['home_group']}: {home_hours:.1f}h\n"
+    message += f"🏘 Група {config['old_home_group']}: {old_home_hours:.1f}h\n"
+    message += f"\n✅ Рекомендація: Група {config['home_group'] if home_hours >= old_home_hours else config['old_home_group']}"
+
     await update.message.reply_text(message)
 
 
 async def changes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
+
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
         return
-    
+
     await update.message.reply_text("⏳ Перевіряю зміни...")
-    
-    fetcher = PowerDataFetcher()
+
     parser = PowerScheduleParser()
     history = ScheduleHistory(f".bot_history_{user_id}.json")
-    
-    data = fetcher.get_latest_schedule()
-    if not data:
+
+    try:
+        schedules = _fetch_all_schedules(parser)
+    except Exception:
         await update.message.reply_text("❌ Не вдалося отримати дані")
         return
-    
-    html = data.get("rawHtml", "")
-    date = parser.extract_date(html)
-    schedule = parser.parse_all_groups(html)
-    
+
     config = user_configs[user_id]
-    our_schedule = {
-        config["home_group"]: schedule.get(config["home_group"], []),
-        config["old_home_group"]: schedule.get(config["old_home_group"], [])
-    }
-    
-    changes_list = history.get_changes(date, our_schedule)
-    
-    if changes_list:
-        message = f"🔄 Зміни в графіку на {date}:\n\n"
-        for change in changes_list:
-            message += f"• {change}\n"
-    else:
+    has_changes = False
+    message = ""
+
+    for sched in schedules:
+        if sched['name'] in ['Today', 'Tomorrow']:
+            date = sched['date']
+            schedule = sched['schedule']
+
+            our_schedule = {
+                config["home_group"]: schedule.get(config["home_group"], []),
+                config["old_home_group"]: schedule.get(config["old_home_group"], [])
+            }
+
+            changes_list = history.get_changes(date, our_schedule)
+
+            if changes_list:
+                has_changes = True
+                message += f"🔄 Зміни в графіку на {date} ({sched['name']}):\n\n"
+                for change in changes_list:
+                    message += f"• {change}\n"
+                message += "\n"
+
+            history.save(date, our_schedule)
+
+    if not has_changes:
         message = "✅ Змін немає"
-    
-    history.save(date, our_schedule)
-    await update.message.reply_text(message)
+
+    await update.message.reply_text(message.strip())
 
 
 async def recommend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
+
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
         return
-    
+
     await update.message.reply_text("⏳ Аналізую...")
-    
+
     fetcher = PowerDataFetcher()
     parser = PowerScheduleParser()
     scheduler = WorkScheduler()
-    
+
     data = fetcher.get_latest_schedule()
     if not data:
         await update.message.reply_text("❌ Не вдалося отримати дані")
         return
-    
+
     html = data.get("rawHtml", "")
     schedule = parser.parse_all_groups(html)
-    
+
     config = user_configs[user_id]
     current_time = datetime.now().strftime("%H:%M")
-    
+
     result = scheduler.recommend(config["home_group"], config["old_home_group"], schedule, current_time)
-    
-    location_emoji = "🏠" if result["location"] == "home" else "🏘"
-    location_name = "Основна квартира" if result["location"] == "home" else "Друга квартира"
-    
-    message = f"💡 Рекомендація (зараз {current_time}):\n\n{location_emoji} {location_name}\n💬 {result['reason']}"
-    
+
+    location_emoji = "🏠" if result["location"] == config["home_group"] else "🏘"
+    location_name = "Основна квартира" if result["location"] == config["home_group"] else "Друга квартира"
+
+    message = f"💡 Рекомендація (зараз {current_time}):\n\n"
+    message += f"{location_emoji} {location_name} (група {result['location']})\n"
+    message += f"💬 {result['reason']}"
+
     await update.message.reply_text(message)
 
 

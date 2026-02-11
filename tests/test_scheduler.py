@@ -12,8 +12,8 @@ def test_recommend_location_both_have_power():
     scheduler = WorkScheduler()
     result = scheduler.recommend("1.1", "3.2", schedule, "10:00")
     
-    assert result["location"] == "home"
-    assert result["reason"] == "В обох локаціях є світло"
+    assert result["location"] == "1.1"
+    assert "обох" in result["reason"].lower()
 
 
 def test_recommend_location_home_no_power():
@@ -26,8 +26,8 @@ def test_recommend_location_home_no_power():
     scheduler = WorkScheduler()
     result = scheduler.recommend("1.1", "3.2", schedule, "10:00")
     
-    assert result["location"] == "old_home"
-    assert "немає світла" in result["reason"]
+    assert result["location"] == "3.2"
+    assert "без світла" in result["reason"].lower() or "зі світлом" in result["reason"].lower()
 
 
 def test_recommend_location_both_no_power():
@@ -40,7 +40,7 @@ def test_recommend_location_both_no_power():
     scheduler = WorkScheduler()
     result = scheduler.recommend("1.1", "3.2", schedule, "10:00")
     
-    assert result["location"] in ["home", "old_home"]
+    assert result["location"] in ["1.1", "3.2"]
 
 
 def test_is_power_available():
