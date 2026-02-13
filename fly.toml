@@ -1,0 +1,12 @@
+app = "loe-telegram-bot"
+primary_region = "waw"
+
+[build]
+
+[env]
+  PYTHONUNBUFFERED = "1"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
