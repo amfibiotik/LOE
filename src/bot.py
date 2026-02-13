@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,7 +11,22 @@ from src.history import ScheduleHistory
 
 load_dotenv()
 
-user_configs = {}
+USER_CONFIGS_FILE = ".bot_user_configs.json"
+
+
+def _load_user_configs() -> dict:
+    if os.path.exists(USER_CONFIGS_FILE):
+        with open(USER_CONFIGS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def _save_user_configs():
+    with open(USER_CONFIGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(user_configs, f, ensure_ascii=False, indent=2)
+
+
+user_configs = _load_user_configs()
 
 
 def get_developer_info() -> str:
@@ -70,13 +86,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def config(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
+    user_id = str(update.effective_user.id)
+
     if len(context.args) == 2:
         user_configs[user_id] = {
             "home_group": context.args[0],
             "old_home_group": context.args[1]
         }
+        _save_user_configs()
         await update.message.reply_text(
             f"✅ Налаштовано!\n"
             f"🏠 Основна квартира: група {context.args[0]}\n"
@@ -123,7 +140,7 @@ def _fetch_all_schedules(parser):
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user_id = str(update.effective_user.id)
 
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
@@ -178,7 +195,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user_id = str(update.effective_user.id)
 
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
@@ -266,7 +283,7 @@ async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def changes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user_id = str(update.effective_user.id)
 
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
@@ -315,7 +332,7 @@ async def changes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def recommend(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user_id = str(update.effective_user.id)
 
     if user_id not in user_configs:
         await update.message.reply_text("❌ Спочатку налаштуй черги: /config")
