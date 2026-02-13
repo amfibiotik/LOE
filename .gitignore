@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+venv/
+.bot_user_configs.json
+.bot_history_*.json
+.schedule_history.json
