@@ -1,0 +1,7 @@
+{
+  "name": "loe-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "kv_namespaces": [{ "binding": "LOE_KV", "id": "48be56f5ddd04ae18a23f635a975a0fd" }],
+  "triggers": { "crons": ["*/5 * * * *"] }
+}
